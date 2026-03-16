@@ -1,0 +1,5 @@
+{
+  "name": "Qwen3-TTS Script Dubbing",
+  "description": "A web UI to automatically read uploaded script JSON files and generate voiceovers using Qwen3-TTS.",
+  "requestFramePermissions": []
+}
