@@ -21,6 +21,7 @@ const upload = multer({ dest: UPLOADS_DIR });
 
 const VOICES_FILE = path.join(process.cwd(), 'voices.json');
 let voices: any[] = [];
+let apiBaseUrl = "http://127.0.0.1:7860/";
 if (fs.existsSync(VOICES_FILE)) {
   try {
     voices = JSON.parse(fs.readFileSync(VOICES_FILE, 'utf-8'));
@@ -82,6 +83,20 @@ app.delete('/api/voices/:id', (req, res) => {
   }
 });
 
+app.post('/api/config/url', (req, res) => {
+  const { url } = req.body;
+  if (url) {
+    apiBaseUrl = url.endsWith('/') ? url : url + '/';
+    res.json({ success: true, url: apiBaseUrl });
+  } else {
+    res.status(400).json({ error: "URL is required" });
+  }
+});
+
+app.get('/api/config/url', (req, res) => {
+  res.json({ url: apiBaseUrl });
+});
+
 app.post('/api/tts/clone', async (req, res) => {
   try {
     const { text, voiceId } = req.body;
@@ -91,8 +106,10 @@ app.post('/api/tts/clone', async (req, res) => {
       return res.status(404).json({ error: 'Voice not found' });
     }
 
-    console.log(`Generating Clone TTS for: "${text}" with voice: "${voice.name}"`);
-    const client = await Client.connect("http://127.0.0.1:7860/");
+    console.log(`Generating Clone TTS for: "${text}" with voice: "${voice.name}" using API: ${apiBaseUrl}`);
+    
+    // Create client with potential SSL issues ignored for local/internal IPs
+    const client = await Client.connect(apiBaseUrl);
     
     // Call the new API: /fn_voice_clone
     const result = await client.predict("/fn_voice_clone", { 
@@ -104,7 +121,7 @@ app.post('/api/tts/clone', async (req, res) => {
     
     console.log("Gradio API Result:", JSON.stringify(result.data, null, 2));
     
-    const GRADIO_URL = "http://127.0.0.1:7860/";
+    const GRADIO_URL = apiBaseUrl;
     let audioUrl = null;
 
     // Enhanced helper to make URL absolute and handle Gradio /file= prefix
