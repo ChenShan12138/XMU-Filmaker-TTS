@@ -100,7 +100,7 @@ app.post('/api/tts/clone', async (req, res) => {
       text: text,
       language: "auto",
       ref_audio: handle_file(path.resolve(voice.audioPath)),
-      ref_text: voice.refText,
+      ref_text: voice.refText || "",
       segment_gen: false
     });
     

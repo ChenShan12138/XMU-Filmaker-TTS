@@ -28,7 +28,7 @@ interface Voice {
   copyright: string;
   ip: string;
   description: string;
-  refText: string;
+  refText?: string;
   audioUrl: string;
 }
 
@@ -94,7 +94,7 @@ export default function App() {
   const handleAddVoice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!voiceFile) return alert("请上传参考音频文件");
-    if (!voiceForm.name || !voiceForm.refText) return alert("角色名和参考音频文本为必填项");
+    if (!voiceForm.name) return alert("角色名为必填项");
 
     setIsSubmittingVoice(true);
     const formData = new FormData();
@@ -430,10 +430,6 @@ export default function App() {
                   <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-zinc-700 mb-1">音色描述</label>
                     <input type="text" value={voiceForm.description} onChange={e => setVoiceForm({...voiceForm, description: e.target.value})} className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如: 声音清脆，带有一丝忧郁" />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-zinc-700 mb-1">参考音频文本 *</label>
-                    <textarea required value={voiceForm.refText} onChange={e => setVoiceForm({...voiceForm, refText: e.target.value})} className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none h-20" placeholder="必须与上传的参考音频内容完全一致" />
                   </div>
                   <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-zinc-700 mb-1">参考音频文件 *</label>
