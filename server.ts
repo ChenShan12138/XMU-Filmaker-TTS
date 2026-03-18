@@ -92,7 +92,7 @@ app.post('/api/tts/clone', async (req, res) => {
     }
 
     console.log(`Generating Clone TTS for: "${text}" with voice: "${voice.name}"`);
-    const client = await Client.connect("https://tm25akasnu-7860.cnb.run/");
+    const client = await Client.connect("http://59.77.13.188:7860/");
     
     // Call the API for cloning
     const result = await client.predict("/generate_clone_fn", {
