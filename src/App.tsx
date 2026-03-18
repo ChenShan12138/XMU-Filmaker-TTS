@@ -99,7 +99,7 @@ export default function App() {
     setIsSubmittingVoice(true);
     const formData = new FormData();
     formData.append('audio', voiceFile);
-    Object.entries(voiceForm).forEach(([key, value]) => formData.append(key, value));
+    Object.entries(voiceForm).forEach(([key, value]) => formData.append(key, value as string));
 
     try {
       const res = await fetch('/api/voices', { method: 'POST', body: formData });
