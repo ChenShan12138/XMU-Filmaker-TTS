@@ -106,32 +106,56 @@ app.post('/api/tts/clone', async (req, res) => {
     
     console.log("Gradio API Result:", JSON.stringify(result.data, null, 2));
     
+    const GRADIO_URL = "http://59.77.13.188:7860/";
     let audioUrl = null;
-    
-    console.log("Checking file explorer for generated audio...");
-    const updateResult = await client.predict("/update", []);
-    
-    if (Array.isArray(updateResult.data) && updateResult.data.length > 0) {
-        const files = updateResult.data[0];
-        if (Array.isArray(files) && files.length > 0) {
-            const latestFile = files[files.length - 1]; 
-            console.log("Latest file found:", latestFile);
-            
-            const lambdaResult = await client.predict("/lambda", { x: [latestFile] });
-            console.log("Lambda Result:", JSON.stringify(lambdaResult.data, null, 2));
-            
-            if (Array.isArray(lambdaResult.data) && lambdaResult.data.length > 0) {
-                const audioObj = lambdaResult.data[0];
-                if (audioObj && typeof audioObj === 'object' && audioObj.url) {
-                    audioUrl = audioObj.url;
-                } else if (typeof audioObj === 'string') {
-                    audioUrl = audioObj;
-                }
-            }
+
+    // Helper to make URL absolute
+    const makeAbsolute = (url: string) => {
+      if (!url) return null;
+      if (url.startsWith('http')) return url;
+      return `${GRADIO_URL.replace(/\/$/, '')}/${url.startsWith('/') ? url.slice(1) : url}`;
+    };
+
+    // 1. Try to get audio from the primary result first (more reliable)
+    if (Array.isArray(result.data)) {
+      for (const item of result.data) {
+        if (item && typeof item === 'object' && item.url) {
+          audioUrl = makeAbsolute(item.url);
+          break;
         }
+        if (typeof item === 'string' && (item.endsWith('.wav') || item.endsWith('.mp3'))) {
+          audioUrl = makeAbsolute(item);
+          break;
+        }
+      }
+    }
+    
+    // 2. Fallback to checking file explorer if primary result didn't have it
+    if (!audioUrl) {
+      console.log("Primary result didn't have audio, checking file explorer...");
+      const updateResult = await client.predict("/update", []);
+      
+      if (Array.isArray(updateResult.data) && updateResult.data.length > 0) {
+          const files = updateResult.data[0];
+          if (Array.isArray(files) && files.length > 0) {
+              const latestFile = files[files.length - 1]; 
+              console.log("Latest file found in explorer:", latestFile);
+              
+              const lambdaResult = await client.predict("/lambda", { x: [latestFile] });
+              if (Array.isArray(lambdaResult.data) && lambdaResult.data.length > 0) {
+                  const audioObj = lambdaResult.data[0];
+                  if (audioObj && typeof audioObj === 'object' && audioObj.url) {
+                      audioUrl = makeAbsolute(audioObj.url);
+                  } else if (typeof audioObj === 'string') {
+                      audioUrl = makeAbsolute(audioObj);
+                  }
+              }
+          }
+      }
     }
 
     if (audioUrl) {
+      console.log("Final Audio URL to frontend:", audioUrl);
       res.json({ audioUrl });
     } else {
       res.status(500).json({ error: "Failed to extract audio URL from response", data: result.data });
