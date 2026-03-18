@@ -92,65 +92,88 @@ app.post('/api/tts/clone', async (req, res) => {
     }
 
     console.log(`Generating Clone TTS for: "${text}" with voice: "${voice.name}"`);
-    const client = await Client.connect("http://59.77.13.188:7860/");
+    const client = await Client.connect("http://127.0.0.1:7860/");
     
-    // Call the API for cloning
-    const result = await client.predict("/generate_clone_fn", {
-      model_name: "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+    // Call the new API: /fn_voice_clone
+    const result = await client.predict("/fn_voice_clone", { 
       text: text,
-      language: "auto",
+      lang: "Auto",
       ref_audio: handle_file(path.resolve(voice.audioPath)),
-      ref_text: voice.refText || "",
-      segment_gen: false
+      ref_text: voice.refText || ""
     });
     
     console.log("Gradio API Result:", JSON.stringify(result.data, null, 2));
     
-    const GRADIO_URL = "http://59.77.13.188:7860/";
+    const GRADIO_URL = "http://127.0.0.1:7860/";
     let audioUrl = null;
 
-    // Helper to make URL absolute
-    const makeAbsolute = (url: string) => {
-      if (!url) return null;
-      if (url.startsWith('http')) return url;
-      return `${GRADIO_URL.replace(/\/$/, '')}/${url.startsWith('/') ? url.slice(1) : url}`;
+    // Enhanced helper to make URL absolute and handle Gradio /file= prefix
+    const makeAbsolute = (path: string) => {
+      if (!path) return null;
+      if (path.startsWith('http')) return path;
+      
+      let cleanPath = path;
+      // If it's a local path like "tmp/xxx.wav", Gradio needs "file=" prefix to serve it
+      if (!cleanPath.startsWith('file=') && !cleanPath.startsWith('/file=')) {
+        cleanPath = "file=" + (cleanPath.startsWith('/') ? cleanPath.slice(1) : cleanPath);
+      }
+      
+      const baseUrl = GRADIO_URL.replace(/\/$/, '');
+      const finalPath = cleanPath.startsWith('/') ? cleanPath.slice(1) : cleanPath;
+      return `${baseUrl}/${finalPath}`;
     };
 
-    // 1. Try to get audio from the primary result first (more reliable)
-    if (Array.isArray(result.data)) {
-      for (const item of result.data) {
-        if (item && typeof item === 'object' && item.url) {
-          audioUrl = makeAbsolute(item.url);
-          break;
+    // Recursive search for anything that looks like an audio file or URL
+    const findAudio = (obj: any): string | null => {
+      if (!obj) return null;
+      if (typeof obj === 'string') {
+        if (obj.toLowerCase().endsWith('.wav') || obj.toLowerCase().endsWith('.mp3') || obj.includes('file=')) {
+          return makeAbsolute(obj);
         }
-        if (typeof item === 'string' && (item.endsWith('.wav') || item.endsWith('.mp3'))) {
-          audioUrl = makeAbsolute(item);
-          break;
+        return null;
+      }
+      if (Array.isArray(obj)) {
+        for (const item of obj) {
+          const found = findAudio(item);
+          if (found) return found;
         }
       }
-    }
+      if (typeof obj === 'object') {
+        // Check common Gradio file object properties
+        if (obj.url) return makeAbsolute(obj.url);
+        if (obj.path) return makeAbsolute(obj.path);
+        if (obj.name && (obj.name.toLowerCase().endsWith('.wav') || obj.name.toLowerCase().endsWith('.mp3'))) {
+          return makeAbsolute(obj.name);
+        }
+        // Deep search all keys
+        for (const key in obj) {
+          const found = findAudio(obj[key]);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    // 1. Try to find audio in the primary result
+    audioUrl = findAudio(result.data);
     
     // 2. Fallback to checking file explorer if primary result didn't have it
     if (!audioUrl) {
       console.log("Primary result didn't have audio, checking file explorer...");
-      const updateResult = await client.predict("/update", []);
-      
-      if (Array.isArray(updateResult.data) && updateResult.data.length > 0) {
-          const files = updateResult.data[0];
-          if (Array.isArray(files) && files.length > 0) {
-              const latestFile = files[files.length - 1]; 
-              console.log("Latest file found in explorer:", latestFile);
-              
-              const lambdaResult = await client.predict("/lambda", { x: [latestFile] });
-              if (Array.isArray(lambdaResult.data) && lambdaResult.data.length > 0) {
-                  const audioObj = lambdaResult.data[0];
-                  if (audioObj && typeof audioObj === 'object' && audioObj.url) {
-                      audioUrl = makeAbsolute(audioObj.url);
-                  } else if (typeof audioObj === 'string') {
-                      audioUrl = makeAbsolute(audioObj);
-                  }
-              }
-          }
+      try {
+        const updateResult = await client.predict("/update", []);
+        audioUrl = findAudio(updateResult.data);
+        
+        if (!audioUrl && Array.isArray(updateResult.data) && updateResult.data.length > 0) {
+            const files = updateResult.data[0];
+            if (Array.isArray(files) && files.length > 0) {
+                const latestFile = files[files.length - 1]; 
+                const lambdaResult = await client.predict("/lambda", { x: [latestFile] });
+                audioUrl = findAudio(lambdaResult.data);
+            }
+        }
+      } catch (e) {
+        console.error("Fallback search failed:", e);
       }
     }
 
