@@ -99,7 +99,7 @@ app.get('/api/config/url', (req, res) => {
 
 app.post('/api/tts/clone', async (req, res) => {
   try {
-    const { text, voiceId } = req.body;
+    const { text, voiceId, scriptName, lineIndex, language } = req.body;
     const voice = voices.find(v => v.id === voiceId);
     
     if (!voice) {
@@ -148,14 +148,37 @@ app.post('/api/tts/clone', async (req, res) => {
     const afterList = await getAudioList();
     const newFiles = afterList.filter((f: any) => !beforeNames.includes(getFilename(f)));
     
-    let audioUrl = null;
+    let gradioAudioUrl = null;
     if (newFiles.length > 0) {
       const newFile = newFiles[newFiles.length - 1];
-      audioUrl = new URL(`/audio/download/${getFilename(newFile)}`, apiBaseUrl).toString();
+      gradioAudioUrl = new URL(`/audio/download/${getFilename(newFile)}`, apiBaseUrl).toString();
     } else if (afterList.length > 0) {
       // Fallback: just take the last file in the list
       const lastFile = afterList[afterList.length - 1];
-      audioUrl = new URL(`/audio/download/${getFilename(lastFile)}`, apiBaseUrl).toString();
+      gradioAudioUrl = new URL(`/audio/download/${getFilename(lastFile)}`, apiBaseUrl).toString();
+    }
+
+    let audioUrl = null;
+    if (gradioAudioUrl) {
+      try {
+        // Download the audio from Gradio so we can name it correctly
+        const audioRes = await fetch(gradioAudioUrl);
+        if (audioRes.ok) {
+          const buffer = await audioRes.arrayBuffer();
+          const safeScriptName = (scriptName || 'script').replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '');
+          const safeLang = (language || 'zh').replace(/[^a-zA-Z0-9_-]/g, '');
+          const safeIndex = parseInt(lineIndex) || 0;
+          const fileName = `${safeScriptName}-${safeIndex}-${safeLang}.wav`;
+          const filePath = path.join(UPLOADS_DIR, fileName);
+          fs.writeFileSync(filePath, Buffer.from(buffer));
+          audioUrl = `/uploads/${fileName}`;
+        } else {
+          audioUrl = gradioAudioUrl; // fallback
+        }
+      } catch (e) {
+        console.error("Failed to download audio from Gradio", e);
+        audioUrl = gradioAudioUrl; // fallback
+      }
     }
 
     if (audioUrl) {

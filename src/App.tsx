@@ -45,6 +45,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'script' | 'voices'>('script');
   const [voices, setVoices] = useState<Voice[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
+  const [scriptName, setScriptName] = useState<string>('script');
   const [uniqueCharacters, setUniqueCharacters] = useState<string[]>([]);
   const [characterVoices, setCharacterVoices] = useState<Record<string, string>>({});
   const [isUploading, setIsUploading] = useState(false);
@@ -167,6 +168,7 @@ export default function App() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    setScriptName(file.name.replace(/\.[^/.]+$/, ""));
     setIsUploading(true);
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -220,7 +222,7 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const generateAudio = async (id: string, text: string, voiceId: string) => {
+  const generateAudio = async (id: string, text: string, voiceId: string, lineIndex: number) => {
     setLines(prev => prev.map(line => 
       line.id === id ? { ...line, status: 'generating', errorMsg: undefined } : line
     ));
@@ -231,7 +233,7 @@ export default function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ text, voiceId }),
+        body: JSON.stringify({ text, voiceId, scriptName, lineIndex, language: 'zh' }),
       });
 
       const data = await response.json();
@@ -253,10 +255,11 @@ export default function App() {
 
   const handleGenerateAll = async () => {
     setIsGeneratingAll(true);
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       const voiceId = characterVoices[line.speaker];
       if (line.status !== 'success' && voiceId) {
-        await generateAudio(line.id, line.content, voiceId);
+        await generateAudio(line.id, line.content, voiceId, i);
       }
     }
     setIsGeneratingAll(false);
@@ -387,7 +390,7 @@ export default function App() {
                 </div>
                 
                 <div className="space-y-4">
-                  {lines.map((line) => {
+                  {lines.map((line, index) => {
                     const voiceId = characterVoices[line.speaker];
                     return (
                     <div key={line.id} className="bg-white p-5 rounded-xl shadow-sm border border-zinc-200 flex flex-col gap-4">
@@ -407,7 +410,7 @@ export default function App() {
                         </div>
                         <div className="flex-shrink-0 flex flex-col items-end gap-2">
                           <button
-                            onClick={() => generateAudio(line.id, line.content, voiceId!)}
+                            onClick={() => generateAudio(line.id, line.content, voiceId!, index)}
                             disabled={line.status === 'generating' || !voiceId || isGeneratingAll}
                             className="flex items-center gap-2 bg-zinc-100 text-zinc-900 px-3 py-1.5 rounded-lg hover:bg-zinc-200 transition-colors text-sm font-medium disabled:opacity-50"
                           >
@@ -437,8 +440,17 @@ export default function App() {
                       </div>
                       
                       {line.audioUrl && (
-                        <div className="pt-3 border-t border-zinc-100">
-                          <audio controls src={line.audioUrl} className="w-full h-10" />
+                        <div className="pt-3 border-t border-zinc-100 flex items-center gap-4">
+                          <audio controls src={line.audioUrl} className="flex-1 h-10" />
+                          <a 
+                            href={line.audioUrl} 
+                            download={`${scriptName}-${index}-zh.wav`}
+                            className="flex items-center gap-1 px-3 py-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors text-sm font-medium"
+                            title="下载音频"
+                          >
+                            <Upload className="w-4 h-4 rotate-180" />
+                            下载
+                          </a>
                         </div>
                       )}
                     </div>
