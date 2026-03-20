@@ -140,7 +140,8 @@ app.post('/api/tts/clone', async (req, res) => {
       language: "auto",
       ref_audio: handle_file(path.resolve(voice.audioPath)),
       ref_text: voice.refText || "",
-      segment_gen: false
+      segment_gen: false,
+      output_filename: `output_${Date.now()}.wav`
     });
     
     console.log("Gradio API Result:", JSON.stringify(result.data, null, 2));
