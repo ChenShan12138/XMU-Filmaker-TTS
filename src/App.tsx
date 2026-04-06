@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Play, RefreshCw, Loader2, CheckCircle2, AlertCircle, Mic, FileText, Plus, Trash2, Library, Wand2, Settings } from 'lucide-react';
+import { Upload, Play, RefreshCw, Loader2, CheckCircle2, AlertCircle, Mic, FileText, Plus, Trash2, Library, Wand2, Settings, X, Edit2 } from 'lucide-react';
 
 interface Scene {
   "scene information": {
@@ -19,6 +19,14 @@ interface Scene {
   }>;
 }
 
+interface ReferenceAudio {
+  id: string;
+  audioPath: string;
+  refText?: string;
+  emotion: string;
+  audioUrl: string;
+}
+
 interface Voice {
   id: string;
   name: string;
@@ -28,8 +36,7 @@ interface Voice {
   copyright: string;
   ip: string;
   description: string;
-  refText?: string;
-  audioUrl: string;
+  references: ReferenceAudio[];
 }
 
 interface Line {
@@ -39,6 +46,7 @@ interface Line {
   audioUrl: string | null;
   status: 'idle' | 'generating' | 'success' | 'error';
   errorMsg?: string;
+  emotion?: string;
 }
 
 export default function App() {
@@ -55,43 +63,66 @@ export default function App() {
   // Voice Form State
   const [isAddingVoice, setIsAddingVoice] = useState(false);
   const [voiceForm, setVoiceForm] = useState({
-    name: '', gender: '', category: '', cv: '', copyright: '', ip: '', description: '', refText: ''
+    name: '', gender: '', category: '', cv: '', copyright: '', ip: '', description: ''
   });
-  const [voiceFile, setVoiceFile] = useState<File | null>(null);
   const [isSubmittingVoice, setIsSubmittingVoice] = useState(false);
+  
   const [apiUrl, setApiUrl] = useState("http://127.0.0.1:7860/");
   const [isUpdatingUrl, setIsUpdatingUrl] = useState(false);
+  
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [llmConfig, setLlmConfig] = useState({ apiKey: '', baseUrl: 'https://api.openai.com/v1', modelName: 'gpt-4o-mini' });
+  const [isAutoSelecting, setIsAutoSelecting] = useState(false);
+
+  // Custom Modals State
+  const [alertDialog, setAlertDialog] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ message: string, onConfirm: () => void } | null>(null);
+  
+  // Add Reference Modal State
+  const [refModalVoiceId, setRefModalVoiceId] = useState<string | null>(null);
+  const [refForm, setRefForm] = useState({ emotion: '默认', refText: '' });
+  const [refFile, setRefFile] = useState<File | null>(null);
+  const [isSubmittingRef, setIsSubmittingRef] = useState(false);
+
+  const showAlert = (msg: string) => setAlertDialog(msg);
+  const showConfirm = (msg: string, onConfirm: () => void) => setConfirmDialog({ message: msg, onConfirm });
 
   useEffect(() => {
     fetchVoices();
-    fetchApiUrl();
+    fetchConfig();
   }, []);
 
-  const fetchApiUrl = async () => {
+  const fetchConfig = async () => {
     try {
       const res = await fetch('/api/config/url');
       const data = await res.json();
       if (data.url) setApiUrl(data.url);
+      
+      const llmRes = await fetch('/api/config/llm');
+      const llmData = await llmRes.json();
+      if (llmData.config) setLlmConfig(llmData.config);
     } catch (e) {
-      console.error("Failed to fetch API URL", e);
+      console.error("Failed to fetch config", e);
     }
   };
 
-  const handleUpdateApiUrl = async () => {
+  const handleSaveSettings = async () => {
     setIsUpdatingUrl(true);
     try {
-      const res = await fetch('/api/config/url', {
+      await fetch('/api/config/url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: apiUrl })
       });
-      if (res.ok) {
-        alert("API 地址更新成功");
-      } else {
-        alert("更新失败");
-      }
+      await fetch('/api/config/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(llmConfig)
+      });
+      showAlert("设置保存成功");
+      setIsSettingsOpen(false);
     } catch (e) {
-      alert("网络错误");
+      showAlert("网络错误");
     } finally {
       setIsUpdatingUrl(false);
     }
@@ -127,41 +158,77 @@ export default function App() {
 
   const handleAddVoice = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!voiceFile) return alert("请上传参考音频文件");
-    if (!voiceForm.name || !voiceForm.refText) return alert("角色名和参考音频文本为必填项");
+    if (!voiceForm.name) return showAlert("角色名为必填项");
 
     setIsSubmittingVoice(true);
-    const formData = new FormData();
-    formData.append('audio', voiceFile);
-    Object.entries(voiceForm).forEach(([key, value]) => formData.append(key, value as string));
-
     try {
-      const res = await fetch('/api/voices', { method: 'POST', body: formData });
-      if (res.ok) {
-        await fetchVoices();
-        setIsAddingVoice(false);
-        setVoiceForm({ name: '', gender: '', category: '', cv: '', copyright: '', ip: '', description: '', refText: '' });
-        setVoiceFile(null);
-      } else {
-        const err = await res.json();
-        alert("添加失败: " + err.error);
-      }
+      const res = await fetch('/api/voices', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(voiceForm) 
+      });
+      if (!res.ok) throw new Error("Failed to create voice");
+      
+      await fetchVoices();
+      setIsAddingVoice(false);
+      setVoiceForm({ name: '', gender: '', category: '', cv: '', copyright: '', ip: '', description: '' });
     } catch (e) {
       console.error(e);
-      alert("添加失败");
+      showAlert("添加失败");
     } finally {
       setIsSubmittingVoice(false);
     }
   };
 
-  const handleDeleteVoice = async (id: string) => {
-    if (!confirm("确定要删除这个音色吗？")) return;
+  const submitAddReference = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!refModalVoiceId || !refFile) return showAlert("请选择音频文件");
+    if (!refForm.emotion) return showAlert("请输入情绪标签");
+
+    setIsSubmittingRef(true);
+    const formData = new FormData();
+    formData.append('audio', refFile);
+    formData.append('emotion', refForm.emotion);
+    formData.append('refText', refForm.refText);
+
     try {
-      await fetch(`/api/voices/${id}`, { method: 'DELETE' });
-      await fetchVoices();
+      const res = await fetch(`/api/voices/${refModalVoiceId}/references`, { method: 'POST', body: formData });
+      if (res.ok) {
+        await fetchVoices();
+        setRefModalVoiceId(null);
+        setRefForm({ emotion: '默认', refText: '' });
+        setRefFile(null);
+      } else {
+        showAlert("添加参考音频失败");
+      }
     } catch (e) {
       console.error(e);
+      showAlert("添加参考音频失败");
+    } finally {
+      setIsSubmittingRef(false);
     }
+  };
+
+  const handleDeleteReference = async (voiceId: string, refId: string) => {
+    showConfirm("确定要删除这条参考音频吗？", async () => {
+      try {
+        await fetch(`/api/voices/${voiceId}/references/${refId}`, { method: 'DELETE' });
+        await fetchVoices();
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  };
+
+  const handleDeleteVoice = async (id: string) => {
+    showConfirm("确定要删除这个音色吗？", async () => {
+      try {
+        await fetch(`/api/voices/${id}`, { method: 'DELETE' });
+        await fetchVoices();
+      } catch (e) {
+        console.error(e);
+      }
+    });
   };
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -211,7 +278,7 @@ export default function App() {
         setCharacterVoices(newCharVoices);
       } catch (error) {
         console.error("Failed to parse JSON:", error);
-        alert("Failed to parse JSON file. Please ensure it is a valid script format.");
+        showAlert("Failed to parse JSON file. Please ensure it is a valid script format.");
       } finally {
         setIsUploading(false);
         if (fileInputRef.current) {
@@ -222,7 +289,7 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const generateAudio = async (id: string, text: string, voiceId: string, lineIndex: number) => {
+  const generateAudio = async (id: string, text: string, voiceId: string, lineIndex: number, emotion?: string) => {
     setLines(prev => prev.map(line => 
       line.id === id ? { ...line, status: 'generating', errorMsg: undefined } : line
     ));
@@ -233,7 +300,7 @@ export default function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ text, voiceId, scriptName, lineIndex, language: 'zh' }),
+        body: JSON.stringify({ text, voiceId, scriptName, lineIndex, language: 'zh', emotion }),
       });
 
       const data = await response.json();
@@ -259,10 +326,76 @@ export default function App() {
       const line = lines[i];
       const voiceId = characterVoices[line.speaker];
       if (line.status !== 'success' && voiceId) {
-        await generateAudio(line.id, line.content, voiceId, i);
+        await generateAudio(line.id, line.content, voiceId, i, line.emotion);
       }
     }
     setIsGeneratingAll(false);
+  };
+
+  const handleAutoSelect = async () => {
+    if (!llmConfig.apiKey) {
+      showAlert("请先在设置中配置 LLM API Key");
+      setIsSettingsOpen(true);
+      return;
+    }
+    setIsAutoSelecting(true);
+    try {
+      const prompt = `
+你是一个专业的配音导演。请根据以下剧本和可用的音色库，为每个角色分配最合适的音色，并为每句台词分配最合适的情绪。
+
+可用音色库:
+${JSON.stringify(voices.map(v => ({ id: v.id, name: v.name, description: v.description, gender: v.gender, category: v.category, availableEmotions: v.references?.map((r: any) => r.emotion) || [] })), null, 2)}
+
+剧本角色:
+${uniqueCharacters.join(', ')}
+
+剧本台词:
+${JSON.stringify(lines.map(l => ({ id: l.id, speaker: l.speaker, content: l.content })), null, 2)}
+
+请返回 JSON 格式，包含两个字段：
+1. characterVoices: 键为角色名，值为选中的音色 ID。
+2. lineEmotions: 键为台词 ID，值为选中的情绪（必须是该音色 availableEmotions 中的一个，如果没有则填 "默认"）。
+
+JSON 格式示例:
+{
+  "characterVoices": { "角色A": "voice-id-1" },
+  "lineEmotions": { "0-0": "开心" }
+}
+`;
+
+      const response = await fetch(`${llmConfig.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${llmConfig.apiKey}`
+        },
+        body: JSON.stringify({
+          model: llmConfig.modelName,
+          messages: [{ role: "user", content: prompt }],
+          response_format: { type: "json_object" }
+        })
+      });
+
+      if (!response.ok) throw new Error("LLM API 请求失败");
+      const data = await response.json();
+      const content = JSON.parse(data.choices[0].message.content);
+
+      if (content.characterVoices) {
+        setCharacterVoices(prev => ({ ...prev, ...content.characterVoices }));
+      }
+      if (content.lineEmotions) {
+        setLines(prev => prev.map(line => ({
+          ...line,
+          emotion: content.lineEmotions[line.id] || line.emotion
+        })));
+      }
+      showAlert("智能分配完成！");
+    } catch (error) {
+      console.error(error);
+      showAlert("智能分配失败: " + String(error));
+    } finally {
+      setIsAutoSelecting(false);
+    }
   };
 
   return (
@@ -274,21 +407,30 @@ export default function App() {
             <Mic className="w-6 h-6 text-indigo-600" />
             <h1 className="text-xl font-bold tracking-tight text-zinc-900">Filmaker TTS配音生成</h1>
           </div>
-          <div className="flex space-x-1 bg-zinc-100 p-1 rounded-lg">
+          <div className="flex items-center space-x-2">
             <button
-              onClick={() => setActiveTab('script')}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === 'script' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
+              onClick={() => setIsSettingsOpen(true)}
+              className="p-2 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
+              title="设置"
             >
-              <FileText className="w-4 h-4" />
-              剧本配音
+              <Settings className="w-5 h-5" />
             </button>
-            <button
-              onClick={() => setActiveTab('voices')}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === 'voices' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
-            >
-              <Library className="w-4 h-4" />
-              音色库
-            </button>
+            <div className="flex space-x-1 bg-zinc-100 p-1 rounded-lg">
+              <button
+                onClick={() => setActiveTab('script')}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === 'script' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
+              >
+                <FileText className="w-4 h-4" />
+                剧本配音
+              </button>
+              <button
+                onClick={() => setActiveTab('voices')}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === 'voices' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
+              >
+                <Library className="w-4 h-4" />
+                音色库
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -322,39 +464,19 @@ export default function App() {
               </div>
             </section>
 
-            {/* API Settings Section */}
-            <section className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-200">
-              <div className="flex items-center gap-2 mb-4">
-                <Settings className="w-5 h-5 text-indigo-600" />
-                <h2 className="text-lg font-semibold text-zinc-800">API 配置</h2>
-              </div>
-              <div className="flex flex-col md:flex-row gap-4 items-end">
-                <div className="flex-1">
-                  <label className="block text-sm font-medium text-zinc-700 mb-1">Qwen3 API 地址 (本地或公网)</label>
-                  <input 
-                    type="text" 
-                    value={apiUrl} 
-                    onChange={e => setApiUrl(e.target.value)} 
-                    className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
-                    placeholder="例如: http://127.0.0.1:7860/ 或 https://xxxx.gradio.live/" 
-                  />
-                  <p className="text-xs text-zinc-500 mt-1">
-                    提示: 如果你在本地运行模型，请确保使用公网 IP 或 Gradio 分享链接，除非此应用也运行在本地。
-                  </p>
-                </div>
-                <button 
-                  onClick={handleUpdateApiUrl}
-                  disabled={isUpdatingUrl}
-                  className="px-4 py-2 bg-zinc-800 text-white rounded-md text-sm font-medium hover:bg-zinc-700 transition-colors disabled:opacity-50"
-                >
-                  {isUpdatingUrl ? "更新中..." : "保存配置"}
-                </button>
-              </div>
-            </section>
-
             {uniqueCharacters.length > 0 && (
               <section className="bg-white p-6 rounded-2xl shadow-sm border border-zinc-200">
-                <h2 className="text-lg font-semibold mb-4">角色音色配置</h2>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold">角色音色配置</h2>
+                  <button
+                    onClick={handleAutoSelect}
+                    disabled={isAutoSelecting || voices.length === 0}
+                    className="flex items-center gap-2 bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors text-sm font-medium disabled:opacity-50"
+                  >
+                    {isAutoSelecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                    一键智能分配
+                  </button>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {uniqueCharacters.map(char => (
                     <div key={char} className="flex items-center justify-between p-3 bg-zinc-50 rounded-lg border border-zinc-200">
@@ -405,12 +527,24 @@ export default function App() {
                                 未配置音色
                               </span>
                             )}
+                            {voiceId && (
+                              <select
+                                value={line.emotion || ''}
+                                onChange={(e) => setLines(prev => prev.map(l => l.id === line.id ? { ...l, emotion: e.target.value } : l))}
+                                className="text-xs border border-zinc-200 rounded px-2 py-0.5 bg-white focus:outline-none focus:border-indigo-500"
+                              >
+                                <option value="">默认情绪</option>
+                                {voices.find(v => v.id === voiceId)?.references?.map((r: any) => (
+                                  <option key={r.id} value={r.emotion}>{r.emotion}</option>
+                                ))}
+                              </select>
+                            )}
                           </div>
                           <p className="text-zinc-800 leading-relaxed">{line.content}</p>
                         </div>
                         <div className="flex-shrink-0 flex flex-col items-end gap-2">
                           <button
-                            onClick={() => generateAudio(line.id, line.content, voiceId!, index)}
+                            onClick={() => generateAudio(line.id, line.content, voiceId!, index, line.emotion)}
                             disabled={line.status === 'generating' || !voiceId || isGeneratingAll}
                             className="flex items-center gap-2 bg-zinc-100 text-zinc-900 px-3 py-1.5 rounded-lg hover:bg-zinc-200 transition-colors text-sm font-medium disabled:opacity-50"
                           >
@@ -506,14 +640,6 @@ export default function App() {
                     <label className="block text-sm font-medium text-zinc-700 mb-1">音色描述</label>
                     <input type="text" value={voiceForm.description} onChange={e => setVoiceForm({...voiceForm, description: e.target.value})} className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如: 声音清脆，带有一丝忧郁" />
                   </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-zinc-700 mb-1">参考音频文本 *</label>
-                    <textarea required value={voiceForm.refText} onChange={e => setVoiceForm({...voiceForm, refText: e.target.value})} className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none h-20" placeholder="必须与上传的参考音频内容完全一致" />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-zinc-700 mb-1">参考音频文件 *</label>
-                    <input required type="file" accept="audio/*" onChange={e => setVoiceFile(e.target.files?.[0] || null)} className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
-                  </div>
                 </div>
                 <div className="flex justify-end pt-2">
                   <button type="submit" disabled={isSubmittingVoice} className="flex items-center gap-2 bg-zinc-900 text-white px-6 py-2 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-50">
@@ -541,8 +667,32 @@ export default function App() {
                     {voice.description && <p className="line-clamp-2 mt-2"><span className="font-medium">描述:</span> {voice.description}</p>}
                   </div>
                   <div className="pt-3 border-t border-zinc-100">
-                    <p className="text-xs font-medium text-zinc-700 mb-2">参考音频:</p>
-                    <audio controls src={voice.audioUrl} className="w-full h-8" />
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-medium text-zinc-700">参考音频 ({voice.references?.length || 0})</p>
+                      <button 
+                        onClick={() => setRefModalVoiceId(voice.id)}
+                        className="cursor-pointer text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                      >
+                        <Plus className="w-3 h-3" /> 添加
+                      </button>
+                    </div>
+                    <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                      {voice.references?.map((ref: any) => (
+                        <div key={ref.id} className="bg-zinc-50 p-2 rounded border border-zinc-200">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-medium text-zinc-700 bg-white px-1.5 py-0.5 rounded border border-zinc-200">{ref.emotion}</span>
+                            <button onClick={() => handleDeleteReference(voice.id, ref.id)} className="text-zinc-400 hover:text-red-500">
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                          {ref.refText && <p className="text-[10px] text-zinc-500 mb-1 truncate" title={ref.refText}>{ref.refText}</p>}
+                          <audio controls src={ref.audioUrl} className="w-full h-6" />
+                        </div>
+                      ))}
+                      {(!voice.references || voice.references.length === 0) && (
+                        <p className="text-xs text-zinc-400 text-center py-2">暂无参考音频</p>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -555,6 +705,159 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Settings Modal */}
+      {isSettingsOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-zinc-100">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Settings className="w-5 h-5 text-indigo-600" />
+                系统设置
+              </h2>
+              <button onClick={() => setIsSettingsOpen(false)} className="text-zinc-400 hover:text-zinc-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium text-zinc-900 border-b border-zinc-100 pb-2">Qwen3 TTS API 配置</h3>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">API 地址 (本地或公网)</label>
+                  <input 
+                    type="text" 
+                    value={apiUrl} 
+                    onChange={e => setApiUrl(e.target.value)} 
+                    className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                    placeholder="例如: http://127.0.0.1:7860/" 
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-sm font-medium text-zinc-900 border-b border-zinc-100 pb-2">LLM API 配置 (用于智能分配音色)</h3>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Base URL</label>
+                  <input 
+                    type="text" 
+                    value={llmConfig.baseUrl} 
+                    onChange={e => setLlmConfig({...llmConfig, baseUrl: e.target.value})} 
+                    className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">API Key</label>
+                  <input 
+                    type="password" 
+                    value={llmConfig.apiKey} 
+                    onChange={e => setLlmConfig({...llmConfig, apiKey: e.target.value})} 
+                    className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Model Name</label>
+                  <input 
+                    type="text" 
+                    value={llmConfig.modelName} 
+                    onChange={e => setLlmConfig({...llmConfig, modelName: e.target.value})} 
+                    className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="p-4 border-t border-zinc-100 flex justify-end gap-2 bg-zinc-50">
+              <button onClick={() => setIsSettingsOpen(false)} className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-200 rounded-lg transition-colors">
+                取消
+              </button>
+              <button onClick={handleSaveSettings} disabled={isUpdatingUrl} className="px-4 py-2 text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2">
+                {isUpdatingUrl && <Loader2 className="w-4 h-4 animate-spin" />}
+                保存设置
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Custom Alert Modal */}
+      {alertDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden p-6">
+            <h3 className="text-lg font-semibold mb-2">提示</h3>
+            <p className="text-zinc-600 text-sm mb-6">{alertDialog}</p>
+            <div className="flex justify-end">
+              <button onClick={() => setAlertDialog(null)} className="px-4 py-2 text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg transition-colors">确定</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Confirm Modal */}
+      {confirmDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden p-6">
+            <h3 className="text-lg font-semibold mb-2">确认操作</h3>
+            <p className="text-zinc-600 text-sm mb-6">{confirmDialog.message}</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmDialog(null)} className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-200 rounded-lg transition-colors">取消</button>
+              <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className="px-4 py-2 text-sm font-medium bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors">确认</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Reference Modal */}
+      {refModalVoiceId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-zinc-100">
+              <h2 className="text-lg font-semibold">添加参考音频</h2>
+              <button onClick={() => { setRefModalVoiceId(null); setRefFile(null); }} className="text-zinc-400 hover:text-zinc-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={submitAddReference} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">情绪标签 *</label>
+                <input 
+                  required 
+                  type="text" 
+                  value={refForm.emotion} 
+                  onChange={e => setRefForm({...refForm, emotion: e.target.value})} 
+                  className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                  placeholder="例如: 开心, 悲伤, 愤怒, 默认" 
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">参考音频文本 (选填)</label>
+                <textarea 
+                  value={refForm.refText} 
+                  onChange={e => setRefForm({...refForm, refText: e.target.value})} 
+                  className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none h-20" 
+                  placeholder="音频对应的文本内容" 
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">音频文件 *</label>
+                <input 
+                  required 
+                  type="file" 
+                  accept="audio/*" 
+                  onChange={e => setRefFile(e.target.files?.[0] || null)} 
+                  className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                />
+              </div>
+              <div className="pt-4 flex justify-end gap-2">
+                <button type="button" onClick={() => { setRefModalVoiceId(null); setRefFile(null); }} className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-200 rounded-lg transition-colors">
+                  取消
+                </button>
+                <button type="submit" disabled={isSubmittingRef || !refFile} className="px-4 py-2 text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2">
+                  {isSubmittingRef && <Loader2 className="w-4 h-4 animate-spin" />}
+                  确认添加
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

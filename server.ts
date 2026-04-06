@@ -22,9 +22,32 @@ const upload = multer({ dest: UPLOADS_DIR });
 const VOICES_FILE = path.join(process.cwd(), 'voices.json');
 let voices: any[] = [];
 let apiBaseUrl = "http://127.0.0.1:7860/";
+let llmApiConfig = {
+  apiKey: "",
+  baseUrl: "https://api.openai.com/v1",
+  modelName: "gpt-4o-mini"
+};
+
 if (fs.existsSync(VOICES_FILE)) {
   try {
     voices = JSON.parse(fs.readFileSync(VOICES_FILE, 'utf-8'));
+    // Migrate old voices to new format
+    voices = voices.map(v => {
+      if (!v.references) {
+        v.references = [];
+        if (v.audioPath) {
+          v.references.push({
+            id: crypto.randomUUID(),
+            emotion: '默认',
+            refText: v.refText || '',
+            audioPath: v.audioPath,
+            originalFilename: v.originalFilename,
+            audioUrl: v.audioUrl
+          });
+        }
+      }
+      return v;
+    });
   } catch (e) {
     console.error("Failed to parse voices.json", e);
   }
@@ -36,13 +59,8 @@ app.get('/api/voices', (req, res) => {
   res.json(voices);
 });
 
-app.post('/api/voices', upload.single('audio'), (req, res) => {
+app.post('/api/voices', (req, res) => {
   try {
-    const file = req.file;
-    if (!file) {
-      return res.status(400).json({ error: 'No audio file provided' });
-    }
-
     const newVoice = {
       id: crypto.randomUUID(),
       name: req.body.name,
@@ -52,10 +70,7 @@ app.post('/api/voices', upload.single('audio'), (req, res) => {
       copyright: req.body.copyright,
       ip: req.body.ip,
       description: req.body.description,
-      refText: req.body.refText,
-      audioPath: file.path,
-      originalFilename: file.originalname,
-      audioUrl: `/uploads/${file.filename}`
+      references: []
     };
 
     voices.push(newVoice);
@@ -65,6 +80,64 @@ app.post('/api/voices', upload.single('audio'), (req, res) => {
     console.error("Error adding voice:", error);
     res.status(500).json({ error: String(error) });
   }
+});
+
+app.put('/api/voices/:id', (req, res) => {
+  const id = req.params.id;
+  const index = voices.findIndex(v => v.id === id);
+  if (index !== -1) {
+    voices[index] = { ...voices[index], ...req.body };
+    saveVoices();
+    res.json(voices[index]);
+  } else {
+    res.status(404).json({ error: 'Voice not found' });
+  }
+});
+
+app.post('/api/voices/:id/references', upload.single('audio'), (req, res) => {
+  const id = req.params.id;
+  const index = voices.findIndex(v => v.id === id);
+  if (index !== -1) {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'No audio file provided' });
+    }
+    const newRef = {
+      id: crypto.randomUUID(),
+      emotion: req.body.emotion || '默认',
+      refText: req.body.refText || '',
+      audioPath: file.path,
+      originalFilename: file.originalname,
+      audioUrl: `/uploads/${file.filename}`
+    };
+    if (!voices[index].references) {
+      voices[index].references = [];
+    }
+    voices[index].references.push(newRef);
+    saveVoices();
+    res.json(voices[index]);
+  } else {
+    res.status(404).json({ error: 'Voice not found' });
+  }
+});
+
+app.delete('/api/voices/:id/references/:refId', (req, res) => {
+  const { id, refId } = req.params;
+  const voice = voices.find(v => v.id === id);
+  if (voice && voice.references) {
+    const refIndex = voice.references.findIndex((r: any) => r.id === refId);
+    if (refIndex !== -1) {
+       const ref = voice.references[refIndex];
+       if (fs.existsSync(ref.audioPath)) {
+         fs.unlinkSync(ref.audioPath);
+       }
+       voice.references.splice(refIndex, 1);
+       saveVoices();
+       res.json(voice);
+       return;
+    }
+  }
+  res.status(404).json({ error: 'Reference not found' });
 });
 
 app.delete('/api/voices/:id', (req, res) => {
@@ -97,16 +170,42 @@ app.get('/api/config/url', (req, res) => {
   res.json({ url: apiBaseUrl });
 });
 
+app.post('/api/config/llm', (req, res) => {
+  const { apiKey, baseUrl, modelName } = req.body;
+  llmApiConfig = { apiKey, baseUrl, modelName };
+  res.json({ success: true, config: llmApiConfig });
+});
+
+app.get('/api/config/llm', (req, res) => {
+  res.json({ config: llmApiConfig });
+});
+
 app.post('/api/tts/clone', async (req, res) => {
   try {
-    const { text, voiceId, scriptName, lineIndex, language } = req.body;
+    const { text, voiceId, scriptName, lineIndex, language, emotion } = req.body;
     const voice = voices.find(v => v.id === voiceId);
     
     if (!voice) {
       return res.status(404).json({ error: 'Voice not found' });
     }
 
-    console.log(`Generating Clone TTS for: "${text}" with voice: "${voice.name}" using API: ${apiBaseUrl}`);
+    let refAudioPath = voice.audioPath;
+    let refText = voice.refText || "";
+
+    if (voice.references && voice.references.length > 0) {
+      let selectedRef = voice.references.find((r: any) => r.emotion === emotion);
+      if (!selectedRef) {
+        selectedRef = voice.references[0]; // fallback
+      }
+      refAudioPath = selectedRef.audioPath;
+      refText = selectedRef.refText || "";
+    }
+
+    if (!refAudioPath) {
+      return res.status(400).json({ error: 'No reference audio found for this voice' });
+    }
+
+    console.log(`Generating Clone TTS for: "${text}" with voice: "${voice.name}" (Emotion: ${emotion}) using API: ${apiBaseUrl}`);
     
     // Create client with potential SSL issues ignored for local/internal IPs
     const client = await Client.connect(apiBaseUrl);
@@ -138,8 +237,8 @@ app.post('/api/tts/clone', async (req, res) => {
       model_name: "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
       text: text,
       language: "auto",
-      ref_audio: handle_file(path.resolve(voice.audioPath)),
-      ref_text: voice.refText || "",
+      ref_audio: handle_file(path.resolve(refAudioPath)),
+      ref_text: refText,
       segment_gen: false,
       output_filename: `output_${Date.now()}.wav`
     });
