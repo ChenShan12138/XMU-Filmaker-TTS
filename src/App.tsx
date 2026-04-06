@@ -590,11 +590,10 @@ JSON 格式示例:
                             )}
                             {voiceId && (
                               <select
-                                value={line.emotion || ''}
+                                value={line.emotion || voices.find(v => v.id === voiceId)?.references?.[0]?.emotion || ''}
                                 onChange={(e) => setLines(prev => prev.map(l => l.id === line.id ? { ...l, emotion: e.target.value } : l))}
                                 className="text-xs border border-zinc-200 rounded px-2 py-0.5 bg-white focus:outline-none focus:border-indigo-500"
                               >
-                                <option value="">默认情绪</option>
                                 {voices.find(v => v.id === voiceId)?.references?.map((r: any) => (
                                   <option key={r.id} value={r.emotion}>{r.emotion}</option>
                                 ))}
@@ -639,7 +638,7 @@ JSON 格式示例:
                           <audio controls src={line.audioUrl} className="flex-1 h-10" />
                           <a 
                             href={line.audioUrl} 
-                            download={`${scriptName}-${index}-zh.wav`}
+                            download={`${index}.wav`}
                             className="flex items-center gap-1 px-3 py-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors text-sm font-medium"
                             title="下载音频"
                           >

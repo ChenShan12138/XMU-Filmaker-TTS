@@ -55,6 +55,19 @@ if (fs.existsSync(VOICES_FILE)) {
 
 const saveVoices = () => fs.writeFileSync(VOICES_FILE, JSON.stringify(voices, null, 2));
 
+// Simple Mutex to prevent race conditions during TTS generation
+class Mutex {
+  private mutex = Promise.resolve();
+  lock(): Promise<() => void> {
+    let begin: (unlock: () => void) => void = unlock => {};
+    this.mutex = this.mutex.then(() => new Promise(begin));
+    return new Promise(res => {
+      begin = res;
+    });
+  }
+}
+const ttsMutex = new Mutex();
+
 app.get('/api/voices', (req, res) => {
   res.json(voices);
 });
@@ -181,6 +194,7 @@ app.get('/api/config/llm', (req, res) => {
 });
 
 app.post('/api/tts/clone', async (req, res) => {
+  const unlock = await ttsMutex.lock();
   try {
     const { text, voiceId, scriptName, lineIndex, language, emotion } = req.body;
     const voice = voices.find(v => v.id === voiceId);
@@ -268,7 +282,9 @@ app.post('/api/tts/clone', async (req, res) => {
           const safeScriptName = (scriptName || 'script').replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '');
           const safeLang = (language || 'zh').replace(/[^a-zA-Z0-9_-]/g, '');
           const safeIndex = parseInt(lineIndex) || 0;
-          const fileName = `${safeScriptName}-${safeIndex}-${safeLang}.wav`;
+          // Use a unique ID to prevent browser caching issues when regenerating the same line
+          const uniqueId = crypto.randomUUID().substring(0, 8);
+          const fileName = `${safeScriptName}-${safeIndex}-${safeLang}-${uniqueId}.wav`;
           const filePath = path.join(UPLOADS_DIR, fileName);
           fs.writeFileSync(filePath, Buffer.from(buffer));
           audioUrl = `/uploads/${fileName}`;
@@ -290,6 +306,8 @@ app.post('/api/tts/clone', async (req, res) => {
   } catch (error) {
     console.error("TTS Error:", error);
     res.status(500).json({ error: String(error) });
+  } finally {
+    unlock();
   }
 });
 
