@@ -49,6 +49,7 @@ interface Line {
   status: 'idle' | 'generating' | 'success' | 'error';
   errorMsg?: string;
   emotion?: string;
+  voiceDescription?: string;
 }
 
 export default function App() {
@@ -71,6 +72,11 @@ export default function App() {
   const [isSubmittingVoice, setIsSubmittingVoice] = useState(false);
   
   const [apiUrl, setApiUrl] = useState("http://127.0.0.1:7860/");
+  const [ttsConfig, setTtsConfig] = useState({
+    modelType: 'voxcpm2' as 'qwen' | 'voxcpm2',
+    qwenUrl: "http://127.0.0.1:7860/",
+    voxcpm2Url: "http://127.0.0.1:8808/"
+  });
   const [isUpdatingUrl, setIsUpdatingUrl] = useState(false);
   
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -88,6 +94,11 @@ export default function App() {
   const [refFile, setRefFile] = useState<File | null>(null);
   const [isSubmittingRef, setIsSubmittingRef] = useState(false);
 
+  // Save Generated Audio to Voice Library State
+  const [saveToVoiceData, setSaveToVoiceData] = useState<{ voiceId: string, audioUrl: string, content: string } | null>(null);
+  const [saveToVoiceForm, setSaveToVoiceForm] = useState({ emotion: '', refText: '' });
+  const [isSavingToVoice, setIsSavingToVoice] = useState(false);
+
   const showAlert = (msg: string) => setAlertDialog(msg);
   const showConfirm = (msg: string, onConfirm: () => void) => setConfirmDialog({ message: msg, onConfirm });
 
@@ -101,6 +112,7 @@ export default function App() {
       const res = await fetch('/api/config/url');
       const data = await res.json();
       if (data.url) setApiUrl(data.url);
+      if (data.config) setTtsConfig(data.config);
       
       const llmRes = await fetch('/api/config/llm');
       const llmData = await llmRes.json();
@@ -116,13 +128,14 @@ export default function App() {
       await fetch('/api/config/url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: apiUrl })
+        body: JSON.stringify({ ...ttsConfig, url: ttsConfig.qwenUrl })
       });
       await fetch('/api/config/llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(llmConfig)
       });
+      setApiUrl(ttsConfig.qwenUrl);
       showAlert("设置保存成功");
       setIsSettingsOpen(false);
     } catch (e) {
@@ -149,6 +162,36 @@ export default function App() {
       return changed ? updated : prev;
     });
   }, [voices, uniqueCharacters]);
+
+  const handleSaveToVoice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!saveToVoiceData) return;
+    
+    setIsSavingToVoice(true);
+    try {
+      const res = await fetch(`/api/voices/${saveToVoiceData.voiceId}/references/from-upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audioUrl: saveToVoiceData.audioUrl,
+          emotion: saveToVoiceForm.emotion || '默认',
+          refText: saveToVoiceForm.refText || saveToVoiceData.content
+        })
+      });
+      
+      if (res.ok) {
+        await fetchVoices();
+        setSaveToVoiceData(null);
+        showAlert("已成功存入音色库");
+      } else {
+        showAlert("保存失败");
+      }
+    } catch (e) {
+      showAlert("网络错误");
+    } finally {
+      setIsSavingToVoice(false);
+    }
+  };
 
   const fetchVoices = async () => {
     try {
@@ -306,7 +349,7 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const generateAudio = async (id: string, text: string, voiceId: string, lineIndex: number, emotion?: string) => {
+  const generateAudio = async (id: string, text: string, voiceId: string, lineIndex: number, emotion?: string, voiceDescription?: string) => {
     setLines(prev => prev.map(line => 
       line.id === id ? { ...line, status: 'generating', errorMsg: undefined } : line
     ));
@@ -317,7 +360,7 @@ export default function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ text, voiceId, scriptName, lineIndex, language: 'zh', emotion }),
+        body: JSON.stringify({ text, voiceId, scriptName, lineIndex, language: 'zh', emotion, voiceDescription }),
       });
 
       const data = await response.json();
@@ -343,7 +386,7 @@ export default function App() {
       const line = lines[i];
       const voiceId = characterVoices[line.speaker];
       if (line.status !== 'success' && voiceId) {
-        await generateAudio(line.id, line.content, voiceId, i, line.emotion);
+        await generateAudio(line.id, line.content, voiceId, i, line.emotion, line.voiceDescription);
       }
     }
     setIsGeneratingAll(false);
@@ -358,7 +401,7 @@ export default function App() {
     setIsAutoSelecting(true);
     try {
       const prompt = `
-你是一个专业的配音导演。请根据以下剧本和可用的音色库，为每个角色分配最合适的音色，并为每句台词分配最合适的情绪。
+你是一个专业的配音导演。请根据以下剧本和可用的音色库，为每个角色分配最合适的音色，并为每句台词分配最合适的情绪和声音描述。
 
 可用音色库:
 ${JSON.stringify(voices.map(v => ({ id: v.id, name: v.name, description: v.description, gender: v.gender, category: v.category, availableEmotions: v.references?.map((r: any) => r.emotion) || [] })), null, 2)}
@@ -369,14 +412,20 @@ ${uniqueCharacters.join(', ')}
 剧本台词:
 ${JSON.stringify(lines.map(l => ({ id: l.id, speaker: l.speaker, content: l.content })), null, 2)}
 
-请返回 JSON 格式，包含两个字段：
+请返回 JSON 格式，包含三个字段：
 1. characterVoices: 键为角色名，值为选中的音色 ID。
 2. lineEmotions: 键为台词 ID，值为选中的情绪（必须是该音色 availableEmotions 中的一个，如果没有则填 "默认"）。
+3. lineDescriptions: 键为台词 ID，值为一段详细的声音描述（control instruction），用于指导 TTS 模型生成更符合情境的声音。
+
+声音描述示例：
+- "中老年女性，声音低沉阴冷，语速缓慢而有力，字字深思熟虑，带有深不可测的城府与威慑感。"
+- "暴躁的中年男声，语速快，充满无奈和愤怒"
 
 JSON 格式示例:
 {
   "characterVoices": { "角色A": "voice-id-1" },
-  "lineEmotions": { "0-0": "开心" }
+  "lineEmotions": { "0-0": "开心" },
+  "lineDescriptions": { "0-0": "声音轻快，带有明显的笑意" }
 }
 `;
 
@@ -400,16 +449,17 @@ JSON 格式示例:
       if (content.characterVoices) {
         setCharacterVoices(prev => ({ ...prev, ...content.characterVoices }));
       }
-      if (content.lineEmotions) {
+      if (content.lineEmotions || content.lineDescriptions) {
         setLines(prev => prev.map(line => ({
           ...line,
-          emotion: content.lineEmotions[line.id] || line.emotion
+          emotion: content.lineEmotions?.[line.id] || line.emotion,
+          voiceDescription: content.lineDescriptions?.[line.id] || line.voiceDescription
         })));
       }
-      showAlert("智能分配完成！");
+      showAlert("配音导演指导完成！");
     } catch (error) {
       console.error(error);
-      showAlert("智能分配失败: " + String(error));
+      showAlert("指导失败: " + String(error));
     } finally {
       setIsAutoSelecting(false);
     }
@@ -455,7 +505,37 @@ JSON 格式示例:
             <Mic className="w-6 h-6 text-indigo-600" />
             <h1 className="text-xl font-bold tracking-tight text-zinc-900">Filmaker TTS配音生成</h1>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-4">
+            <div className="flex items-center bg-zinc-100 p-1 rounded-lg border border-zinc-200">
+              <button
+                onClick={() => {
+                  const newConfig = { ...ttsConfig, modelType: 'voxcpm2' as const };
+                  setTtsConfig(newConfig);
+                  fetch('/api/config/url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...newConfig, url: newConfig.qwenUrl })
+                  });
+                }}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${ttsConfig.modelType === 'voxcpm2' ? 'bg-white text-indigo-600 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
+              >
+                VoxCPM2
+              </button>
+              <button
+                onClick={() => {
+                  const newConfig = { ...ttsConfig, modelType: 'qwen' as const };
+                  setTtsConfig(newConfig);
+                  fetch('/api/config/url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...newConfig, url: newConfig.qwenUrl })
+                  });
+                }}
+                className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${ttsConfig.modelType === 'qwen' ? 'bg-white text-indigo-600 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
+              >
+                Qwen3-TTS
+              </button>
+            </div>
             <button
               onClick={() => setIsSettingsOpen(true)}
               className="p-2 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
@@ -522,7 +602,7 @@ JSON 格式示例:
                     className="flex items-center gap-2 bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors text-sm font-medium disabled:opacity-50"
                   >
                     {isAutoSelecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                    一键智能分配
+                    配音导演Agent指导
                   </button>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -600,11 +680,20 @@ JSON 格式示例:
                               </select>
                             )}
                           </div>
-                          <p className="text-zinc-800 leading-relaxed">{line.content}</p>
+                          <p className="text-zinc-800 leading-relaxed mb-3">{line.content}</p>
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">声音描述 (Voice Description)</label>
+                            <textarea
+                              value={line.voiceDescription || ''}
+                              onChange={(e) => setLines(prev => prev.map(l => l.id === line.id ? { ...l, voiceDescription: e.target.value } : l))}
+                              placeholder="例如：声音低沉阴冷，语速缓慢而有力..."
+                              className="w-full text-xs border border-zinc-200 rounded-lg px-3 py-2 bg-zinc-50 focus:outline-none focus:border-indigo-500 focus:bg-white transition-all h-12 resize-none"
+                            />
+                          </div>
                         </div>
                         <div className="flex-shrink-0 flex flex-col items-end gap-2">
                           <button
-                            onClick={() => generateAudio(line.id, line.content, voiceId!, index, line.emotion)}
+                            onClick={() => generateAudio(line.id, line.content, voiceId!, index, line.emotion, line.voiceDescription)}
                             disabled={line.status === 'generating' || !voiceId || isGeneratingAll}
                             className="flex items-center gap-2 bg-zinc-100 text-zinc-900 px-3 py-1.5 rounded-lg hover:bg-zinc-200 transition-colors text-sm font-medium disabled:opacity-50"
                           >
@@ -633,20 +722,33 @@ JSON 格式示例:
                         </div>
                       </div>
                       
-                      {line.audioUrl && (
-                        <div className="pt-3 border-t border-zinc-100 flex items-center gap-4">
-                          <audio controls src={line.audioUrl} className="flex-1 h-10" />
-                          <a 
-                            href={line.audioUrl} 
-                            download={`${index}.wav`}
-                            className="flex items-center gap-1 px-3 py-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors text-sm font-medium"
-                            title="下载音频"
-                          >
-                            <Upload className="w-4 h-4 rotate-180" />
-                            下载
-                          </a>
-                        </div>
-                      )}
+                          {line.audioUrl && (
+                            <div className="pt-3 border-t border-zinc-100 flex items-center gap-4">
+                              <audio controls src={line.audioUrl} className="flex-1 h-10" />
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => {
+                                    setSaveToVoiceData({ voiceId: voiceId!, audioUrl: line.audioUrl!, content: line.content });
+                                    setSaveToVoiceForm({ emotion: line.emotion || '', refText: line.content });
+                                  }}
+                                  className="flex items-center gap-1 px-3 py-2 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-colors text-sm font-medium"
+                                  title="存入音色库"
+                                >
+                                  <Library className="w-4 h-4" />
+                                  存入音色库
+                                </button>
+                                <a 
+                                  href={line.audioUrl} 
+                                  download={`${index}.wav`}
+                                  className="flex items-center gap-1 px-3 py-2 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors text-sm font-medium"
+                                  title="下载音频"
+                                >
+                                  <Upload className="w-4 h-4 rotate-180" />
+                                  下载
+                                </a>
+                              </div>
+                            </div>
+                          )}
                     </div>
                   );
                   })}
@@ -770,6 +872,53 @@ JSON 格式示例:
         )}
       </main>
 
+      {/* Save to Voice Modal */}
+      {saveToVoiceData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b border-zinc-100">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Library className="w-5 h-5 text-emerald-600" />
+                存入音色库
+              </h2>
+              <button onClick={() => setSaveToVoiceData(null)} className="text-zinc-400 hover:text-zinc-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveToVoice} className="p-6 space-y-4">
+              <p className="text-sm text-zinc-500">将生成的音频作为参考音频保存到音色库中。</p>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">情绪标签</label>
+                <input 
+                  type="text" 
+                  value={saveToVoiceForm.emotion} 
+                  onChange={e => setSaveToVoiceForm({...saveToVoiceForm, emotion: e.target.value})} 
+                  className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                  placeholder="例如: 愤怒, 开心..." 
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">参考文本</label>
+                <textarea 
+                  value={saveToVoiceForm.refText} 
+                  onChange={e => setSaveToVoiceForm({...saveToVoiceForm, refText: e.target.value})} 
+                  className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none h-20 resize-none" 
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button type="button" onClick={() => setSaveToVoiceData(null)} className="px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 rounded-lg transition-colors">
+                  取消
+                </button>
+                <button type="submit" disabled={isSavingToVoice} className="flex items-center gap-2 bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50">
+                  {isSavingToVoice ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                  确认保存
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Settings Modal */}
       {isSettingsOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -783,23 +932,9 @@ JSON 格式示例:
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-6 space-y-6">
+            <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
               <div className="space-y-4">
-                <h3 className="text-sm font-medium text-zinc-900 border-b border-zinc-100 pb-2">Qwen3 TTS API 配置</h3>
-                <div>
-                  <label className="block text-xs text-zinc-500 mb-1">API 地址 (本地或公网)</label>
-                  <input 
-                    type="text" 
-                    value={apiUrl} 
-                    onChange={e => setApiUrl(e.target.value)} 
-                    className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
-                    placeholder="例如: http://127.0.0.1:7860/" 
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <h3 className="text-sm font-medium text-zinc-900 border-b border-zinc-100 pb-2">LLM API 配置 (用于智能分配音色)</h3>
+                <h3 className="text-sm font-medium text-zinc-900 border-b border-zinc-100 pb-2">LLM API 配置 (用于配音导演指导)</h3>
                 <div>
                   <label className="block text-xs text-zinc-500 mb-1">Base URL</label>
                   <input 
