@@ -98,6 +98,7 @@ export default function App() {
   const [saveToVoiceData, setSaveToVoiceData] = useState<{ voiceId: string, audioUrl: string, content: string } | null>(null);
   const [saveToVoiceForm, setSaveToVoiceForm] = useState({ emotion: '', refText: '' });
   const [isSavingToVoice, setIsSavingToVoice] = useState(false);
+  const [rawScriptData, setRawScriptData] = useState<Scene[] | null>(null);
 
   const showAlert = (msg: string) => setAlertDialog(msg);
   const showConfirm = (msg: string, onConfirm: () => void) => setConfirmDialog({ message: msg, onConfirm });
@@ -162,6 +163,29 @@ export default function App() {
       return changed ? updated : prev;
     });
   }, [voices, uniqueCharacters]);
+
+  const handleExportScript = () => {
+    if (!rawScriptData) return;
+    
+    // Create a deep copy
+    const updatedData = JSON.parse(JSON.stringify(rawScriptData));
+    
+    // Update content in updatedData based on lines state
+    lines.forEach(line => {
+      const parts = line.id.split('-');
+      if (parts.length === 2) {
+        const sceneIdx = parseInt(parts[0]);
+        const dialogIdx = parseInt(parts[1]);
+        if (updatedData[sceneIdx] && updatedData[sceneIdx].scene[dialogIdx]) {
+          updatedData[sceneIdx].scene[dialogIdx].content = line.content;
+        }
+      }
+    });
+    
+    const blob = new Blob([JSON.stringify(updatedData, null, 2)], { type: 'application/json' });
+    saveAs(blob, `${scriptName}_updated.json`);
+    showAlert("剧本已导出");
+  };
 
   const handleSaveToVoice = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -302,6 +326,7 @@ export default function App() {
       try {
         const content = e.target?.result as string;
         const data: Scene[] = JSON.parse(content);
+        setRawScriptData(data);
         
         const extractedLines: Line[] = [];
         const chars = new Set<string>();
@@ -631,6 +656,14 @@ JSON 格式示例:
                   <h2 className="text-xl font-semibold">台词列表 ({lines.length})</h2>
                   <div className="flex gap-2">
                     <button
+                      onClick={handleExportScript}
+                      disabled={!rawScriptData}
+                      className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 text-sm font-medium"
+                    >
+                      <Download className="w-4 h-4" />
+                      导出修改后的剧本
+                    </button>
+                    <button
                       onClick={handleDownloadZip}
                       disabled={isZipping || !lines.some(l => l.audioUrl)}
                       className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 text-sm font-medium"
@@ -680,7 +713,14 @@ JSON 格式示例:
                               </select>
                             )}
                           </div>
-                          <p className="text-zinc-800 leading-relaxed mb-3">{line.content}</p>
+                          <div className="flex flex-col gap-1.5 mb-3">
+                            <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">台词内容 (Dialogue Content)</label>
+                            <textarea
+                              value={line.content}
+                              onChange={(e) => setLines(prev => prev.map(l => l.id === line.id ? { ...l, content: e.target.value, status: l.status === 'success' ? 'idle' : l.status } : l))}
+                              className="w-full text-zinc-800 leading-relaxed border border-zinc-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-indigo-500 transition-all min-h-[60px] resize-y"
+                            />
+                          </div>
                           <div className="flex flex-col gap-1.5">
                             <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">声音描述 (Voice Description)</label>
                             <textarea
