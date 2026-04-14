@@ -934,7 +934,47 @@ JSON 格式示例:
             </div>
             <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
               <div className="space-y-4">
+                <h3 className="text-sm font-medium text-zinc-900 border-b border-zinc-100 pb-2">TTS API 配置</h3>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">VoxCPM2 API 地址</label>
+                  <input 
+                    type="text" 
+                    value={ttsConfig.voxcpm2Url} 
+                    onChange={e => setTtsConfig({...ttsConfig, voxcpm2Url: e.target.value})} 
+                    className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none mb-2" 
+                    placeholder="例如: http://127.0.0.1:8808/" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">Qwen3-TTS API 地址</label>
+                  <input 
+                    type="text" 
+                    value={ttsConfig.qwenUrl} 
+                    onChange={e => setTtsConfig({...ttsConfig, qwenUrl: e.target.value})} 
+                    className="w-full border border-zinc-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
+                    placeholder="例如: http://127.0.0.1:7860/" 
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-4">
                 <h3 className="text-sm font-medium text-zinc-900 border-b border-zinc-100 pb-2">LLM API 配置 (用于配音导演指导)</h3>
+                <div className="flex gap-2 mb-2">
+                  <button 
+                    type="button"
+                    onClick={() => setLlmConfig({ apiKey: 'ollama', baseUrl: 'http://localhost:11434/v1', modelName: 'qwen3.5:9b' })} // Ollama doesn't strictly need API key but OpenAI client might
+                    className="text-[10px] px-2 py-1 bg-zinc-100 hover:bg-zinc-200 rounded border border-zinc-200 transition-colors"
+                  >
+                    使用本地 Ollama (Qwen)
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={() => setLlmConfig({ apiKey: '', baseUrl: 'https://api.openai.com/v1', modelName: 'gpt-4o-mini' })}
+                    className="text-[10px] px-2 py-1 bg-zinc-100 hover:bg-zinc-200 rounded border border-zinc-200 transition-colors"
+                  >
+                    使用 OpenAI
+                  </button>
+                </div>
                 <div>
                   <label className="block text-xs text-zinc-500 mb-1">Base URL</label>
                   <input 
